@@ -14,5 +14,9 @@ Most likely you'll need to run this script as root. Always read the script befor
 ## change log
 Features in initial version:
 * Scan existing WP installations.
+* Display active themes and plugins
 * Display list of users with administrator and editor privileges.
-* TODO: Display suspicious wp-cron jobs.
+
+## todo
+This is the plan:
+* Display suspicious wp-cron jobs.
