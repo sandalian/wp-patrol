@@ -1,4 +1,15 @@
 <?php
+/*
+ * WP Patrol - WordPress Security Intelligence & Monitoring Tool
+ * Author: Sandalian <sandalian@protonmail.com>
+ * Website: https://github.com/sandalian/wp-patrol
+ * Version: 1.0.0
+ * License: MIT
+ * Usage: php wp-patrol.php <target_directory>
+ * Example: php wp-patrol.php /var/www/html
+ */
+
+
 // ============================================================================
 // COLOR & STYLING FUNCTIONS
 // ============================================================================
@@ -109,8 +120,8 @@ function draw_banner() {
         wp_header("  ╚███╔███╔╝██║           ██║     ██║  ██║   ██║   ██║  ██║╚██████╔╝███████╗"),
         wp_header("   ╚══╝╚══╝ ╚═╝           ╚═╝     ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"),
         "",
-        wp_dim("                    WordPress Security Intelligence & Monitoring Tool"),
-        wp_dim("                                   v1.0.0"),
+        wp_dim("               WordPress Security Intelligence & Monitoring Tool"),
+        wp_dim("                                 v1.0.0"),
         ""
     ];
     
