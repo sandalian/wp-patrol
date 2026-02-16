@@ -228,16 +228,38 @@ echo draw_banner();
 echo "\n";
 
 if ($argc !== 2) {
-    echo "Usage: php wp-patrol.php <dirname>\n";
+    echo draw_box("ERROR", [
+        wp_error("Invalid usage!"),
+        "",
+        wp_label("Usage: ") . wp_value("php wp-patrol.php <directory>"),
+        "",
+        wp_dim("Example: php wp-patrol.php /var/www/html")
+    ], 70);
+    echo "\n";
     exit(1);
 }
 
 $scanDir = $argv[1];
 
 if (!is_dir($scanDir)) {
-    echo "Error: Directory not found.\n";
+    echo draw_box("ERROR", [
+        wp_error("Directory not found!"),
+        "",
+        wp_label("Path: ") . wp_value($scanDir),
+        "",
+        wp_dim("Please check the path and try again.")
+    ], 70);
+    echo "\n";
     exit(1);
 }
+
+echo draw_box("SCAN INITIATED", [
+    wp_label("Target Directory: ") . wp_value($scanDir),
+    wp_label("Timestamp: ") . wp_value(date('Y-m-d H:i:s')),
+], 80);
+echo "\n\n";
+
+echo wp_info("Scanning for WordPress installations...\n");
 
 function findWpConfigs($dir) {
     $wpConfigs = [];
@@ -255,9 +277,23 @@ function findWpConfigs($dir) {
 $wpConfigs = findWpConfigs($scanDir);
 
 if (empty($wpConfigs)) {
-    echo "No wp-config.php files found in the specified directory.\n";
+    echo "\n";
+    echo draw_box("SCAN COMPLETE", [
+        wp_warning("No WordPress installations found"),
+        "",
+        wp_dim("No wp-config.php files were detected in the specified directory."),
+        wp_dim("This could mean:"),
+        wp_dim("  • No WordPress sites are installed"),
+        wp_dim("  • Insufficient read permissions"),
+        wp_dim("  • Sites are located in a different directory")
+    ], 80);
+    echo "\n";
     exit(0);
 }
+
+echo wp_success("Found " . count($wpConfigs) . " WordPress installation(s)\n\n");
+echo wp_info("Gathering site information...\n\n");
+
 
 function getDbCredentials($file) {
     $content = file_get_contents($file);
@@ -286,12 +322,25 @@ function getDbCredentials($file) {
     return $credentials;
 }
 
+
 $allSiteData = [];
+$totalSites = count($wpConfigs);
+$processedSites = 0;
+$failedConnections = [];
 
 foreach ($wpConfigs as $wpConfig) {
+    $processedSites++;
+    
+    // Show progress
+    echo "\r" . wp_dim("Processing: ") . draw_progress_bar($processedSites, $totalSites, 40);
+    
     $credentials = getDbCredentials($wpConfig);
 
     if (empty($credentials)) {
+        $failedConnections[] = [
+            'config' => $wpConfig,
+            'reason' => 'Unable to parse wp-config.php'
+        ];
         continue;
     }
 
@@ -303,10 +352,18 @@ foreach ($wpConfigs as $wpConfig) {
             $credentials['DB_NAME']
         );
     } catch (Exception $e) {
+        $failedConnections[] = [
+            'config' => $wpConfig,
+            'reason' => 'Database connection failed: ' . $e->getMessage()
+        ];
         continue;
     }
 
     if ($conn->connect_error) {
+        $failedConnections[] = [
+            'config' => $wpConfig,
+            'reason' => 'Database connection error: ' . $conn->connect_error
+        ];
         continue;
     }
 
@@ -327,12 +384,31 @@ foreach ($wpConfigs as $wpConfig) {
     $result = $conn->query($sql);
     $admins = $result->fetch_all(MYSQLI_ASSOC);
 
+    // Get WordPress directory (parent of wp-config.php)
+    $wpDir = dirname($wpConfig);
+    $pluginsDir = $wpDir . '/wp-content/plugins';
+    
+    // Process plugins and check if files exist
+    $pluginsList = unserialize($plugins['option_value']);
+    $pluginsWithStatus = [];
+    
+    if (is_array($pluginsList)) {
+        foreach ($pluginsList as $plugin) {
+            $pluginPath = $pluginsDir . '/' . $plugin;
+            $pluginsWithStatus[] = [
+                'name' => $plugin,
+                'exists' => file_exists($pluginPath)
+            ];
+        }
+    }
+    
     $allSiteData[] = [
         'config_path' => $wpConfig,
         'blogname' => $siteInfo[0]['option_value'],
+        'home_url' => $siteInfo[1]['option_value'],
         'site_url' => $siteInfo[2]['option_value'],
         'theme' => $theme['option_value'],
-        'plugins' => unserialize($plugins['option_value']),
+        'plugins' => $pluginsWithStatus,
         'admins' => array_map(function ($admin) {
             return [
                 'user_login' => $admin['user_login'],
@@ -345,13 +421,13 @@ foreach ($wpConfigs as $wpConfig) {
     $conn->close();
 }
 
-$count = 1;
 foreach ($allSiteData as $siteData) {
     echo "--------------------------------------------------\n";
-    echo 'SITE '.$count. ': ' .$siteData['blogname'] . "\n";
+    echo $siteData['blogname'] . "\n";
     echo "--------------------------------------------------\n";
     echo "Config Path: " . $siteData['config_path'] . "\n";
     echo "Site URL: " . $siteData['site_url'] . "\n";
+    echo "Home URL: " . $siteData['home_url'] . "\n";
     echo "Theme: " . $siteData['theme'] . "\n";
 
     echo "Plugins:\n";
@@ -371,22 +447,44 @@ foreach ($allSiteData as $siteData) {
         if (strlen($admin['user_email']) > $emailWidth) {
             $emailWidth = strlen($admin['user_email']);
         }
-        if (strlen($admin['user_registered']) > $registeredWidth) {
-            $registeredWidth = strlen($admin['user_registered']);
+        
+        // Draw table with indent - match header width (80 chars total, minus 3 for indent = 77)
+        $table = draw_table($headers, $rows, null, 77);
+        $tableLines = explode("\n", $table);
+        foreach ($tableLines as $line) {
+            echo "   " . $line . "\n";
         }
     }
-    $usernameWidth += 2;
-    $emailWidth += 2;
-    $registeredWidth += 2;
+    
+    echo "\n";
+    echo wp_dim("───────────────────────────────────────────────────────────────────────────────\n");
+    echo "\n";
+    
+    $count++;
+}
 
-    echo str_pad("Username", $usernameWidth) . str_pad("Email", $emailWidth) . str_pad("Registered", $registeredWidth) . "\n";
-    echo str_repeat("-", $usernameWidth + $emailWidth + $registeredWidth) . "\n";
+// Final summary
+echo "\n";
 
-    foreach ($siteData['admins'] as $admin) {
-        echo str_pad($admin['user_login'], $usernameWidth) . str_pad($admin['user_email'], $emailWidth) . str_pad($admin['user_registered'], $registeredWidth) . "\n";
+// Build summary content
+$summaryContent = [
+    wp_success("All sites have been analyzed"),
+    "",
+    wp_label("Total Sites Scanned: ") . wp_bold(count($allSiteData)),
+    wp_label("Failed Connections: ") . (count($failedConnections) > 0 ? wp_warning(count($failedConnections)) : wp_success("0")),
+];
+
+// Add failed connection details if any
+if (count($failedConnections) > 0) {
+    $summaryContent[] = "";
+    $summaryContent[] = wp_warning("Failed Connection Details:");
+    foreach ($failedConnections as $failure) {
+        $summaryContent[] = wp_dim("  " . basename(dirname($failure['config'])));
+        $summaryContent[] = wp_dim("    Path: ") . wp_value($failure['config']);
+        $summaryContent[] = wp_dim("    Reason: ") . wp_error($failure['reason']);
+        $summaryContent[] = "";
     }
 
     echo str_repeat("-", $usernameWidth + $emailWidth + $registeredWidth) . "\n";
     echo "\n\n";
-    $count++;
 }
