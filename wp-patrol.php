@@ -1,7 +1,7 @@
 <?php
 /*
  * WP Patrol - WordPress Security Intelligence & Monitoring Tool
- * Author: Sandalian <sandalian@protonmail.com>
+ * Author: Yeni Setiawan <sandalian@protonmail.com>
  * Website: https://github.com/sandalian/wp-patrol
  * Version: 1.0.0
  * License: MIT
