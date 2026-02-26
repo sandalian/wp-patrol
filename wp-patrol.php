@@ -305,7 +305,7 @@ if (empty($wpConfigs)) {
 echo wp_success("Found " . count($wpConfigs) . " WordPress installation(s)\n\n");
 echo wp_info("Gathering site information...\n\n");
 
-
+// Mendapatkan credentials database dari wp-config.php
 function getDbCredentials($file) {
     $content = file_get_contents($file);
     $credentials = [];
@@ -378,19 +378,24 @@ foreach ($wpConfigs as $wpConfig) {
         continue;
     }
 
+
+    // Get site information from the database
     $tablePrefix = $credentials['DB_TABLE_PREFIX'];
     $sql = "SELECT option_name, option_value FROM {$tablePrefix}options WHERE option_name IN ('siteurl', 'blogname') ORDER BY option_name ASC";
     $result = $conn->query($sql);
     $siteInfo = $result->fetch_all(MYSQLI_ASSOC);
 
+    // Get theme information from the database
     $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'template'";
     $result = $conn->query($sql);
     $theme = $result->fetch_assoc();
 
+    // Get plugin information from the database
     $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'active_plugins'";
     $result = $conn->query($sql);
     $plugins = $result->fetch_assoc();
 
+    // Get admin information from the database
     $sql = "SELECT user_login, user_email, user_registered FROM {$tablePrefix}users u JOIN {$tablePrefix}usermeta um ON u.ID = um.user_id WHERE um.meta_key = '{$tablePrefix}capabilities' AND um.meta_value LIKE '%administrator%'";
     $result = $conn->query($sql);
     $admins = $result->fetch_all(MYSQLI_ASSOC);
