@@ -1,4 +1,14 @@
 <?php
+/*
+ * WP Patrol - WordPress Security Intelligence & Monitoring Tool
+ * Author: Yeni Setiawan <sandalian@protonmail.com>
+ * Website: https://github.com/sandalian/wp-patrol
+ * Version: 1.0.0
+ * License: MIT
+ * Usage: php wp-patrol.php <target_directory>
+ * Example: php wp-patrol.php /var/www/html
+ */
+
 // ============================================================================
 // COLOR & STYLING FUNCTIONS
 // ============================================================================
@@ -117,6 +127,7 @@ function draw_banner() {
     return implode("\n", $banner);
 }
 
+// yep, fancy progress bar
 function draw_progress_bar($current, $total, $width = 50) {
     $percentage = ($current / $total) * 100;
     $filled = floor(($current / $total) * $width);
@@ -128,6 +139,7 @@ function draw_progress_bar($current, $total, $width = 50) {
     return sprintf("[%s] %3d%% (%d/%d)", $bar, $percentage, $current, $total);
 }
 
+// yep, fancy table
 function draw_table($headers, $rows, $columnWidths = null, $totalWidth = null) {
     if ($columnWidths === null) {
         // Auto-calculate column widths
@@ -239,6 +251,7 @@ if ($argc !== 2) {
     exit(1);
 }
 
+// all hail CLI
 $scanDir = $argv[1];
 
 if (!is_dir($scanDir)) {
@@ -261,6 +274,7 @@ echo "\n\n";
 
 echo wp_info("Scanning for WordPress installations...\n");
 
+// find any wp-config.php files, should be filtered later
 function findWpConfigs($dir) {
     $wpConfigs = [];
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir));
@@ -294,7 +308,7 @@ if (empty($wpConfigs)) {
 echo wp_success("Found " . count($wpConfigs) . " WordPress installation(s)\n\n");
 echo wp_info("Gathering site information...\n\n");
 
-
+// get db credentials from wp-config.php
 function getDbCredentials($file) {
     $content = file_get_contents($file);
     $credentials = [];
@@ -367,19 +381,23 @@ foreach ($wpConfigs as $wpConfig) {
         continue;
     }
 
+    // get site info from database
     $tablePrefix = $credentials['DB_TABLE_PREFIX'];
     $sql = "SELECT option_name, option_value FROM {$tablePrefix}options WHERE option_name IN ('siteurl', 'blogname') ORDER BY option_name ASC";
     $result = $conn->query($sql);
     $siteInfo = $result->fetch_all(MYSQLI_ASSOC);
 
+    // get active theme
     $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'template'";
     $result = $conn->query($sql);
     $theme = $result->fetch_assoc();
 
+    // get active plugins
     $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'active_plugins'";
     $result = $conn->query($sql);
     $plugins = $result->fetch_assoc();
 
+    // get administrator users
     $sql = "SELECT user_login, user_email, user_registered FROM {$tablePrefix}users u JOIN {$tablePrefix}usermeta um ON u.ID = um.user_id WHERE um.meta_key = '{$tablePrefix}capabilities' AND um.meta_value LIKE '%administrator%'";
     $result = $conn->query($sql);
     $admins = $result->fetch_all(MYSQLI_ASSOC);
