@@ -1,15 +1,4 @@
 <?php
-/*
- * WP Patrol - WordPress Security Intelligence & Monitoring Tool
- * Author: Yeni Setiawan <sandalian@protonmail.com>
- * Website: https://github.com/sandalian/wp-patrol
- * Version: 1.0.0
- * License: MIT
- * Usage: php wp-patrol.php <target_directory>
- * Example: php wp-patrol.php /var/www/html
- */
-
-
 // ============================================================================
 // COLOR & STYLING FUNCTIONS
 // ============================================================================
@@ -120,8 +109,8 @@ function draw_banner() {
         wp_header("  ╚███╔███╔╝██║           ██║     ██║  ██║   ██║   ██║  ██║╚██████╔╝███████╗"),
         wp_header("   ╚══╝╚══╝ ╚═╝           ╚═╝     ╚═╝  ╚═╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"),
         "",
-        wp_dim("               WordPress Security Intelligence & Monitoring Tool"),
-        wp_dim("                                 v1.0.0"),
+        wp_dim("                    WordPress Security Intelligence & Monitoring Tool"),
+        wp_dim("                                   v1.0.0"),
         ""
     ];
     
@@ -305,7 +294,7 @@ if (empty($wpConfigs)) {
 echo wp_success("Found " . count($wpConfigs) . " WordPress installation(s)\n\n");
 echo wp_info("Gathering site information...\n\n");
 
-// Mendapatkan credentials database dari wp-config.php
+
 function getDbCredentials($file) {
     $content = file_get_contents($file);
     $credentials = [];
@@ -378,24 +367,19 @@ foreach ($wpConfigs as $wpConfig) {
         continue;
     }
 
-
-    // Get site information from the database
     $tablePrefix = $credentials['DB_TABLE_PREFIX'];
     $sql = "SELECT option_name, option_value FROM {$tablePrefix}options WHERE option_name IN ('siteurl', 'blogname') ORDER BY option_name ASC";
     $result = $conn->query($sql);
     $siteInfo = $result->fetch_all(MYSQLI_ASSOC);
 
-    // Get theme information from the database
     $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'template'";
     $result = $conn->query($sql);
     $theme = $result->fetch_assoc();
 
-    // Get plugin information from the database
     $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'active_plugins'";
     $result = $conn->query($sql);
     $plugins = $result->fetch_assoc();
 
-    // Get admin information from the database
     $sql = "SELECT user_login, user_email, user_registered FROM {$tablePrefix}users u JOIN {$tablePrefix}usermeta um ON u.ID = um.user_id WHERE um.meta_key = '{$tablePrefix}capabilities' AND um.meta_value LIKE '%administrator%'";
     $result = $conn->query($sql);
     $admins = $result->fetch_all(MYSQLI_ASSOC);
@@ -421,8 +405,7 @@ foreach ($wpConfigs as $wpConfig) {
     $allSiteData[] = [
         'config_path' => $wpConfig,
         'blogname' => $siteInfo[0]['option_value'],
-        'home_url' => $siteInfo[1]['option_value'],
-        'site_url' => $siteInfo[2]['option_value'],
+        'site_url' => $siteInfo[1]['option_value'],
         'theme' => $theme['option_value'],
         'plugins' => $pluginsWithStatus,
         'admins' => array_map(function ($admin) {
@@ -437,31 +420,96 @@ foreach ($wpConfigs as $wpConfig) {
     $conn->close();
 }
 
+echo "\n\n";
+echo wp_success("Data collection complete!\n\n");
+
+// ============================================================================
+// SUMMARY DASHBOARD
+// ============================================================================
+
+$totalPlugins = 0;
+$totalAdmins = 0;
+$uniqueThemes = [];
+
+foreach ($allSiteData as $site) {
+    $totalPlugins += count($site['plugins']);
+    $totalAdmins += count($site['admins']);
+    $uniqueThemes[$site['theme']] = true;
+}
+
+echo draw_box("SUMMARY DASHBOARD", [
+    "",
+    wp_label("Total Sites Found:        ") . wp_bold(count($allSiteData)),
+    wp_label("Failed Connections:       ") . (count($failedConnections) > 0 ? wp_warning(count($failedConnections)) : wp_success("0")),
+    wp_label("Total Active Plugins:     ") . wp_bold($totalPlugins),
+    wp_label("Total Admin Users:        ") . wp_bold($totalAdmins),
+    wp_label("Unique Themes:            ") . wp_bold(count($uniqueThemes)),
+    "",
+], 80);
+
+echo "\n\n";
+echo wp_header("═══════════════════════════════════════════════════════════════════════════════\n");
+echo wp_bold("                              DETAILED SITE REPORTS                              \n");
+echo wp_header("═══════════════════════════════════════════════════════════════════════════════\n");
+echo "\n";
+
+
+
+$count = 1;
 foreach ($allSiteData as $siteData) {
-    echo "--------------------------------------------------\n";
-    echo $siteData['blogname'] . "\n";
-    echo "--------------------------------------------------\n";
-    echo "Config Path: " . $siteData['config_path'] . "\n";
-    echo "Site URL: " . $siteData['site_url'] . "\n";
-    echo "Home URL: " . $siteData['home_url'] . "\n";
-    echo "Theme: " . $siteData['theme'] . "\n";
+    // Site header
+    echo wp_header("┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓\n");
+    $siteTitle = "SITE #" . $count . ": " . $siteData['blogname'];
+    $padding = 78 - strlen($siteTitle);
+    echo wp_header("┃") . " " . wp_bold($siteTitle) . str_repeat(" ", $padding) . wp_header("┃\n");
+    echo wp_header("┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n");
+    echo "\n";
+    
+    // Basic Information
+    echo wp_section("BASIC INFORMATION\n");
+    echo wp_sep("   ├─ ") . wp_label("Config Path:  ") . wp_dim($siteData['config_path']) . "\n";
+    echo wp_sep("   ├─ ") . wp_label("Site URL:     ") . wp_info($siteData['site_url']) . "\n";
+    echo wp_sep("   └─ ") . wp_label("Active Theme: ") . wp_value($siteData['theme']) . "\n";
+    echo "\n";
 
-    echo "Plugins:\n";
-    foreach ($siteData['plugins'] as $plugin) {
-        echo "  - " . $plugin . "\n";
-    }
-
-    echo "Admins:\n";
-    $usernameWidth = 0;
-    $emailWidth = 0;
-    $registeredWidth = 0;
-
-    foreach ($siteData['admins'] as $admin) {
-        if (strlen($admin['user_login']) > $usernameWidth) {
-            $usernameWidth = strlen($admin['user_login']);
+    // Plugins Section
+    echo wp_section("ACTIVE PLUGINS (" . count($siteData['plugins']) . ")\n");
+    if (empty($siteData['plugins'])) {
+        echo wp_dim("   └─ No active plugins\n");
+    } else {
+        $pluginCount = count($siteData['plugins']);
+        $pluginIndex = 0;
+        foreach ($siteData['plugins'] as $pluginData) {
+            $pluginIndex++;
+            $isLast = ($pluginIndex === $pluginCount);
+            $connector = $isLast ? "└─" : "├─";
+            
+            // Display plugin name with strikethrough if file doesn't exist
+            if ($pluginData['exists']) {
+                echo wp_sep("   " . $connector . " ") . wp_value($pluginData['name']) . "\n";
+            } else {
+                echo wp_sep("   " . $connector . " ") . wp_strikethrough($pluginData['name']) . wp_dim(" (missing)") . "\n";
+            }
         }
-        if (strlen($admin['user_email']) > $emailWidth) {
-            $emailWidth = strlen($admin['user_email']);
+    }
+    echo "\n";
+
+    // Administrators Section
+    echo wp_section("ADMINISTRATOR ACCOUNTS (" . count($siteData['admins']) . ")\n");
+    
+    if (empty($siteData['admins'])) {
+        echo wp_warning("   └─ No administrators found!\n");
+    } else {
+        // Build table data
+        $headers = ['Username', 'Email', 'Registered'];
+        $rows = [];
+        
+        foreach ($siteData['admins'] as $admin) {
+            $rows[] = [
+                wp_value($admin['user_login']),
+                wp_info($admin['user_email']),
+                wp_dim($admin['user_registered'])
+            ];
         }
         
         // Draw table with indent - match header width (80 chars total, minus 3 for indent = 77)
@@ -500,7 +548,9 @@ if (count($failedConnections) > 0) {
         $summaryContent[] = wp_dim("    Reason: ") . wp_error($failure['reason']);
         $summaryContent[] = "";
     }
-
-    echo str_repeat("-", $usernameWidth + $emailWidth + $registeredWidth) . "\n";
-    echo "\n\n";
 }
+
+$summaryContent[] = wp_label("Timestamp: ") . wp_value(date('Y-m-d H:i:s'));
+
+echo draw_box("SCAN COMPLETE", $summaryContent, 80);
+echo "\n";
