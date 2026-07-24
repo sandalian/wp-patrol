@@ -217,6 +217,7 @@ function draw_table($headers, $rows, $columnWidths = null, $totalWidth = null) {
         foreach ($row as $i => $cell) {
             $cellLen = strlen(preg_replace('/\033\[[0-9;]+m/', '', $cell));
             $padding = $columnWidths[$i] - $cellLen - 1;
+            $padding = max(0, $padding);
             $rowLine .= " " . $cell . str_repeat(" ", $padding) . wp_sep("│");
         }
         $lines[] = $rowLine;
@@ -391,6 +392,41 @@ function getDbCredentials($file) {
     return $credentials;
 }
 
+// Check if a cron event is suspicious (especially file downloading or code execution)
+function is_suspicious_cron($hook, $args) {
+    // Unescape forward slashes in JSON representation of args
+    $arg_string = str_replace('\/', '/', json_encode($args));
+    
+    // Check for file download from URL
+    // Matches http/https URL with script/archive extension or download keywords
+    $has_url = preg_match('/https?:\/\/[^\s\'"]+/i', $arg_string, $url_matches);
+    if ($has_url) {
+        $url = $url_matches[0];
+        // Check if URL points to a script/archive or has suspicious keywords in arguments/hook
+        if (preg_match('/\.(php|zip|gz|sh|exe|bin|txt|py|pl|asp|aspx|js)\??/i', $url) ||
+            preg_match('/(download|get|fetch|payload|shell|backdoor|install)/i', $url) ||
+            preg_match('/(download|get|fetch|payload|shell|backdoor|install)/i', $hook) ||
+            preg_match('/(curl|wget|wp_remote_get|wp_remote_post|file_get_contents)/i', $arg_string)) {
+            return 'high';
+        }
+        return 'medium'; // Contains URL in arguments
+    }
+    
+    // Check for PHP execution keywords in hook or arguments
+    if (preg_match('/(eval|base64_decode|assert|system|exec|shell_exec|passthru|popen|proc_open|create_function)/i', $arg_string) ||
+        preg_match('/(eval|base64_decode|assert|system|exec|shell_exec|passthru|popen|proc_open)/i', $hook)) {
+        return 'high';
+    }
+    
+    // Check for suspicious hook names (long hex md5 or long alphanumeric string mimicking system functions)
+    if (preg_match('/^[a-f0-9]{32}$/', $hook) || preg_match('/^[a-z0-9]{16,20}$/', $hook)) {
+        return 'medium';
+    }
+    
+    return false;
+}
+
+
 
 $allSiteData = [];
 $totalSites = count($wpConfigs);
@@ -457,6 +493,44 @@ foreach ($wpConfigs as $wpConfig) {
     $result = $conn->query($sql);
     $admins = $result->fetch_all(MYSQLI_ASSOC);
 
+    // get cron events
+    $sql = "SELECT option_value FROM {$tablePrefix}options WHERE option_name = 'cron'";
+    $result = $conn->query($sql);
+    $cronOption = $result ? $result->fetch_assoc() : null;
+
+    $suspiciousCrons = [];
+    if ($cronOption && !empty($cronOption['option_value'])) {
+        $cronData = @unserialize($cronOption['option_value']);
+        if (is_array($cronData)) {
+            foreach ($cronData as $timestamp => $hooks) {
+                if ($timestamp === 'version') continue;
+                if (!is_array($hooks)) continue;
+                foreach ($hooks as $hook => $events) {
+                    if (!is_array($events)) continue;
+                    foreach ($events as $key => $event) {
+                        $args = isset($event['args']) ? $event['args'] : [];
+                        $schedule = isset($event['schedule']) ? $event['schedule'] : 'single';
+                        $interval = isset($event['interval']) ? $event['interval'] : null;
+
+                        $suspicious_level = is_suspicious_cron($hook, $args);
+                        if ($suspicious_level) {
+                            $suspiciousCrons[] = [
+                                'timestamp' => $timestamp,
+                                'datetime' => date('Y-m-d H:i:s', $timestamp),
+                                'hook' => $hook,
+                                'key' => $key,
+                                'args' => $args,
+                                'schedule' => $schedule,
+                                'interval' => $interval,
+                                'suspicious_level' => $suspicious_level
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Get WordPress directory (parent of wp-config.php)
     $wpDir = dirname($wpConfig);
     $pluginsDir = $wpDir . '/wp-content/plugins';
@@ -488,6 +562,7 @@ foreach ($wpConfigs as $wpConfig) {
                 'user_registered' => $admin['user_registered'],
             ];
         }, $admins),
+        'suspicious_crons' => $suspiciousCrons,
     ];
 
     $conn->close();
@@ -503,11 +578,13 @@ echo wp_success("Data collection complete!\n\n");
 $totalPlugins = 0;
 $totalAdmins = 0;
 $uniqueThemes = [];
+$totalSuspiciousCrons = 0;
 
 foreach ($allSiteData as $site) {
     $totalPlugins += count($site['plugins']);
     $totalAdmins += count($site['admins']);
     $uniqueThemes[$site['theme']] = true;
+    $totalSuspiciousCrons += count($site['suspicious_crons']);
 }
 
 echo draw_box("SUMMARY DASHBOARD", [
@@ -517,6 +594,7 @@ echo draw_box("SUMMARY DASHBOARD", [
     wp_label("Total Active Plugins:     ") . wp_bold($totalPlugins),
     wp_label("Total Admin Users:        ") . wp_bold($totalAdmins),
     wp_label("Unique Themes:            ") . wp_bold(count($uniqueThemes)),
+    wp_label("Suspicious Cron Events:   ") . ($totalSuspiciousCrons > 0 ? wp_warning($totalSuspiciousCrons) : wp_success("0")),
     "",
 ], 80);
 
@@ -582,6 +660,37 @@ foreach ($allSiteData as $siteData) {
                 wp_value($admin['user_login']),
                 wp_info($admin['user_email']),
                 wp_dim($admin['user_registered'])
+            ];
+        }
+        
+        // Draw table with indent - match header width (80 chars total, minus 3 for indent = 77)
+        $table = draw_table($headers, $rows, null, 77);
+        $tableLines = explode("\n", $table);
+        foreach ($tableLines as $line) {
+            echo "   " . $line . "\n";
+        }
+    }
+    
+    echo "\n";
+
+    // Suspicious Cron Events Section
+    echo wp_section("SUSPICIOUS WP-CRON EVENTS (" . count($siteData['suspicious_crons']) . ")\n");
+    
+    if (empty($siteData['suspicious_crons'])) {
+        echo wp_success("   └─ No suspicious cron events detected\n");
+    } else {
+        // Build table data
+        $headers = ['Hook', 'Schedule', 'Next Run', 'Cron ID (Timestamp / Hook / Key)'];
+        $rows = [];
+        
+        foreach ($siteData['suspicious_crons'] as $cron) {
+            $cronId = $cron['timestamp'] . ' / ' . $cron['hook'] . ' / ' . $cron['key'];
+            $hookColor = ($cron['suspicious_level'] === 'high') ? wp_error($cron['hook']) : wp_warning($cron['hook']);
+            $rows[] = [
+                $hookColor,
+                wp_value($cron['schedule']),
+                wp_dim($cron['datetime']),
+                wp_bold($cronId)
             ];
         }
         
@@ -837,6 +946,9 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
         
         .color-violet .stat-icon { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
         .color-violet:hover { border-color: rgba(99, 102, 241, 0.3); }
+
+        .color-orange .stat-icon { background: rgba(249, 115, 22, 0.1); color: #f97316; }
+        .color-orange:hover { border-color: rgba(249, 115, 22, 0.3); }
 
         .search-filter-section {
             background: rgba(16, 24, 48, 0.3);
@@ -1428,6 +1540,18 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
                     <span class="stat-label">Unique Themes</span>
                 </div>
             </div>
+
+            <div class="stat-card color-orange">
+                <div class="stat-icon">
+                    <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                </div>
+                <div class="stat-content">
+                    <span class="stat-value" id="stat-suspicious-crons">0</span>
+                    <span class="stat-label">Suspicious Crons</span>
+                </div>
+            </div>
         </section>
 
         <section class="failures-section" id="failures-section">
@@ -1490,15 +1614,21 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
             let totalAdmins = 0;
             const uniqueThemes = new Set();
             let sitesWithIssuesCount = 0;
+            let totalSuspiciousCrons = 0;
 
             sites.forEach(site => {
                 totalPlugins += site.plugins ? site.plugins.length : 0;
                 totalAdmins += site.admins ? site.admins.length : 0;
                 if (site.theme) uniqueThemes.add(site.theme);
                 
+                const siteSuspiciousCount = site.suspicious_crons ? site.suspicious_crons.length : 0;
+                totalSuspiciousCrons += siteSuspiciousCount;
+                
                 let hasMissingPlugin = site.plugins && site.plugins.some(p => !p.exists);
                 let hasNoAdmin = !site.admins || site.admins.length === 0;
-                if (hasMissingPlugin || hasNoAdmin) {
+                let hasSuspiciousCron = siteSuspiciousCount > 0;
+                
+                if (hasMissingPlugin || hasNoAdmin || hasSuspiciousCron) {
                     sitesWithIssuesCount++;
                     site.hasIssues = true;
                 } else {
@@ -1511,6 +1641,7 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
             document.getElementById('stat-plugins').textContent = totalPlugins;
             document.getElementById('stat-admins').textContent = totalAdmins;
             document.getElementById('stat-themes').textContent = uniqueThemes.size;
+            document.getElementById('stat-suspicious-crons').textContent = totalSuspiciousCrons;
 
             document.getElementById('count-all').textContent = sites.length;
             document.getElementById('count-issues').textContent = sitesWithIssuesCount + failures.length;
@@ -1628,6 +1759,57 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
                         `;
                     }
 
+                    let cronsHtml = '';
+                    const cronCount = site.suspicious_crons ? site.suspicious_crons.length : 0;
+                    if (cronCount === 0) {
+                        cronsHtml = `
+                            <div class="no-records">
+                                <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                </svg>
+                                <span style="color: #10b981; font-weight: 600;">No suspicious cron events detected</span>
+                            </div>
+                        `;
+                    } else {
+                        cronsHtml = `
+                            <div class="table-responsive">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Hook</th>
+                                            <th>Schedule</th>
+                                            <th>Next Run</th>
+                                            <th>Severity</th>
+                                            <th>Arguments</th>
+                                            <th>Cron ID (Timestamp / Hook / Key)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${site.suspicious_crons.map(c => {
+                                            const sevClass = c.suspicious_level === 'high' ? 'badge-issues' : 'badge-healthy';
+                                            const sevText = c.suspicious_level.toUpperCase();
+                                            const cronId = `${c.timestamp} / ${escapeHtml(c.hook)} / ${escapeHtml(c.key)}`;
+                                            return `
+                                                <tr>
+                                                    <td>
+                                                        <strong style="color: ${c.suspicious_level === 'high' ? '#ef4444' : '#f59e0b'};">
+                                                            ${escapeHtml(c.hook)}
+                                                        </strong>
+                                                    </td>
+                                                    <td><span class="info-value" style="padding: 0.2rem 0.4rem; font-size: 0.8rem;">${escapeHtml(c.schedule)}</span></td>
+                                                    <td><span class="admin-date">${escapeHtml(c.datetime)}</span></td>
+                                                    <td><span class="site-badge ${sevClass}" style="padding: 0.15rem 0.4rem; font-size: 0.75rem;">${sevText}</span></td>
+                                                    <td><code class="info-value code-font" style="font-size: 0.8rem; display: block; max-width: 300px; overflow-x: auto; white-space: pre-wrap;">${escapeHtml(JSON.stringify(c.args))}</code></td>
+                                                    <td><code class="info-value code-font" style="font-weight: 600; font-size: 0.8rem;">${escapeHtml(cronId)}</code></td>
+                                                </tr>
+                                            `;
+                                        }).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        `;
+                    }
+
                     return `
                         <div class="site-card ${site.hasIssues ? 'has-issues' : 'healthy'}" data-index="${index}">
                             <div class="site-card-header">
@@ -1672,6 +1854,12 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
                                         </svg>
                                         Administrators (${adminCount})
                                     </button>
+                                    <button class="tab-button" onclick="switchTab(this, 'crons', ${index})">
+                                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                                        </svg>
+                                        Suspicious Crons (${cronCount})
+                                    </button>
                                 </div>
                                 <div class="tabs-content">
                                     <div class="tab-panel active" data-panel="plugins-${index}">
@@ -1679,6 +1867,9 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
                                     </div>
                                     <div class="tab-panel" data-panel="admins-${index}">
                                         ${adminsHtml}
+                                    </div>
+                                    <div class="tab-panel" data-panel="crons-${index}">
+                                        ${cronsHtml}
                                     </div>
                                 </div>
                             </div>
@@ -1736,8 +1927,12 @@ function generateHtmlReport($scanDir, $allSiteData, $failedConnections) {
                         const themeMatch = (site.theme || '').toLowerCase().includes(query);
                         const configMatch = (site.config_path || '').toLowerCase().includes(query);
                         const pluginMatch = site.plugins && site.plugins.some(p => p.name.toLowerCase().includes(query));
+                        const cronMatch = site.suspicious_crons && site.suspicious_crons.some(c => 
+                            c.hook.toLowerCase().includes(query) || 
+                            JSON.stringify(c.args).toLowerCase().includes(query)
+                        );
                         
-                        return nameMatch || urlMatch || themeMatch || configMatch || pluginMatch;
+                        return nameMatch || urlMatch || themeMatch || configMatch || pluginMatch || cronMatch;
                     }
 
                     return true;
